@@ -10,6 +10,17 @@ import {
   planLandscapeChange,
 } from './landscapes.js';
 import { wearableThemeFor, perchShades } from './wearables.js';
+import {
+  DEFAULT_STYLE,
+  normalizeStyle,
+  planStyleChange,
+  resolveStyleAssets,
+  describeStyleScope,
+  toonTerrainTextureFor,
+  baseMeshName,
+  TOON_ASSETS,
+  TOON_TEXTURES,
+} from './styles.js';
 
 // ---------------------------------------------------------------------------
 // Constants & helpers
@@ -68,6 +79,8 @@ const el = {
   landFood: document.getElementById('landFood'),
   sceneTheme: document.getElementById('sceneTheme'),
   themeBadge: document.getElementById('themeBadge'),
+  styleButtons: Array.from(document.querySelectorAll('.style')),
+  styleScope: document.getElementById('styleScope'),
 };
 
 // ---------------------------------------------------------------------------
@@ -81,6 +94,7 @@ renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.05;
+const MAX_ANISOTROPY = renderer.capabilities.getMaxAnisotropy();
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color('#04120c');
@@ -127,6 +141,35 @@ function applyPalette(p) {
   rim.intensity = p.rimIntensity;
 }
 
+// Toon Desert gets a dedicated bright, cool-daylight override so the freshly
+// textured sand reads warm under a blue sky instead of the muted Classic brown.
+// It is a standalone constant (never a mutation of the frozen LANDSCAPES desert
+// palette) applied ONLY for style=toon + landscape=desert; every other combo
+// keeps its authored landscape palette. The exposure is retinted alongside it so
+// a Classic ⇄ Toon swap restores the exact original look.
+const BASE_EXPOSURE = 1.05; // matches renderer.toneMappingExposure at init
+const TOON_DESERT_EXPOSURE = 1.12;
+const TOON_DESERT_PALETTE = Object.freeze({
+  bg: '#afd8e0', // bright blue/teal daylight sky + fog
+  hemiSky: '#d9f5ff', // cool pale hemisphere sky
+  hemiGround: '#94704a', // warm sand hemisphere ground
+  hemiIntensity: 1.0,
+  keyColor: '#fff1d3', // soft warm key
+  keyIntensity: 1.5,
+  rimColor: '#b9eaff', // cool rim
+  rimIntensity: 0.35,
+});
+
+// Apply the palette + exposure for a (committed style, landscape) pair. Toon
+// Desert uses its override; all other combinations use the landscape's own
+// palette and the base exposure, so switching styles restores the original look.
+function applyStylePalette(k) {
+  const theme = getLandscape(k) || getLandscape(DEFAULT_LANDSCAPE);
+  const toonDesert = styleKey === 'toon' && k === 'desert';
+  applyPalette(toonDesert ? TOON_DESERT_PALETTE : theme.palette);
+  renderer.toneMappingExposure = toonDesert ? TOON_DESERT_EXPOSURE : BASE_EXPOSURE;
+}
+
 // ---------------------------------------------------------------------------
 // Asset loading with graceful geometric fallbacks
 // ---------------------------------------------------------------------------
@@ -150,16 +193,41 @@ const ASSETS = [
   { key: 'accessory-tundra', file: 'accessory-tundra.glb', label: 'accessory-tundra.glb', kind: 'accessory', theme: 'tundra' },
 ];
 
-const templates = {}; // shared key (head/neck/body) -> THREE.Object3D template
+const templates = {}; // Classic shared key (head/neck/body) -> THREE.Object3D template
 const landscapeTemplates = {}; // theme key -> board+scenery template
 const foodTemplates = {}; // theme key -> normalized food template
 const accessoryTemplates = {}; // theme key -> source-space head wearable template
 const assetTags = {};
-let anyFallback = false; // true once any asset falls back to built-in geometry
+// True once any CLASSIC boot asset falls back to built-in geometry. Toon loaders
+// deliberately never touch this (they set toonFallback), so a fully-loaded
+// Classic scene reports "ready" even after a Toon-only fallback.
+let anyFallback = false;
+
+// Toon-style registries, populated lazily by the Toon bundle (first Toon
+// selection, or boot when Toon was persisted). Kept fully separate from the
+// Classic registries so Classic templates/materials/geometry are never mutated
+// and Classic → Toon → Classic restores the original assets exactly.
+const toonTemplates = {}; // 'head'|'neck'|'body' -> upgraded shared rig template
+const toonLandscapeTemplates = {}; // theme key ('desert') -> Toon board template
+const toonFoodTemplates = {}; // theme key ('desert') -> Toon food template
+const toonTextures = { sand: null, sandstone: null }; // base tiling maps (cloned per repeat)
+let toonBundlePromise = null; // cached in-flight/resolved promise → never duplicated
+let toonBundleLoaded = false; // true once the whole bundle has settled
+let toonFallback = false; // true if any Toon asset/texture fell back to a Classic clone / authored material
 
 // The currently selected landscape. Restored from storage so a reload keeps the
 // player's choice; retained (never reset) across an in-session restart.
 let landscapeKey = normalizeLandscape(localStorage.getItem('snake3d-landscape'));
+
+// The committed visual style — what is actually built in the scene. Starts as
+// Classic (Classic-only boot, no Toon requests); a persisted Toon preference is
+// honoured after boot via the normal lazy-load selection path so the committed
+// style only ever advances to Toon once the whole bundle resolves. Retained
+// across an in-session restart.
+let styleKey = DEFAULT_STYLE;
+const persistedStyle = normalizeStyle(localStorage.getItem('snake3d-style'));
+let styleLoading = false; // true while the Toon bundle streams in (locks selectors + gameplay)
+let styleToken = 0; // bumped per Toon request to ignore stale async completions
 
 // The panel shows a concise, gameplay-focused scene status; the per-file list
 // (implementation detail) lives inside the collapsed "Scene details" section.
@@ -168,9 +236,19 @@ let landscapeKey = normalizeLandscape(localStorage.getItem('snake3d-landscape'))
 // visible without exposing file names.
 function updateSceneStatus(state) {
   if (!el.sceneStatus) return;
-  if (state === 'loading') {
+  if (styleLoading) {
+    // Plain, unambiguous state while the Toon bundle streams in. The complete
+    // old scene stays visible behind it; gameplay + selection are disabled.
+    el.sceneStatus.className = 'scene-status loading';
+    el.sceneStatus.textContent = 'Loading Toon style';
+  } else if (state === 'loading') {
     el.sceneStatus.className = 'scene-status loading';
     el.sceneStatus.textContent = 'Loading scene';
+  } else if (styleKey === 'toon' && toonFallback) {
+    // A Toon asset/texture fell back to a Classic clone / authored material:
+    // usable, but some Toon detail is missing.
+    el.sceneStatus.className = 'scene-status fallback';
+    el.sceneStatus.textContent = 'Toon ready · some visual details unavailable';
   } else if (anyFallback) {
     el.sceneStatus.className = 'scene-status fallback';
     el.sceneStatus.textContent = 'Scene ready · simplified graphics';
@@ -180,19 +258,32 @@ function updateSceneStatus(state) {
   }
 }
 
+function addAssetRow(key, label) {
+  const li = document.createElement('li');
+  const name = document.createElement('span');
+  name.textContent = label;
+  const tag = document.createElement('span');
+  tag.className = 'tag loading';
+  tag.textContent = 'loading';
+  li.append(name, tag);
+  el.assetList.appendChild(li);
+  assetTags[key] = tag;
+}
+
 function renderAssetList() {
   el.assetList.innerHTML = '';
-  for (const a of ASSETS) {
-    const li = document.createElement('li');
-    const name = document.createElement('span');
-    name.textContent = a.label;
-    const tag = document.createElement('span');
-    tag.className = 'tag loading';
-    tag.textContent = 'loading';
-    li.append(name, tag);
-    el.assetList.appendChild(li);
-    assetTags[a.key] = tag;
-  }
+  for (const a of ASSETS) addAssetRow(a.key, a.label);
+}
+
+// Append the Toon bundle's per-file rows to Scene details the first time it is
+// requested, so their loaded/fallback tags are visible alongside the Classic
+// assets without exposing file names in the headline status.
+let toonRowsAdded = false;
+function ensureToonAssetRows() {
+  if (toonRowsAdded) return;
+  toonRowsAdded = true;
+  for (const a of TOON_ASSETS) addAssetRow(a.key, a.label);
+  for (const t of TOON_TEXTURES) addAssetRow(t.key, t.label);
 }
 
 function setTag(key, state) {
@@ -553,6 +644,178 @@ function loadAsset(a) {
 }
 
 // ---------------------------------------------------------------------------
+// Toon style: lazy bundle (5 GLBs + 2 textures) with Classic fallbacks
+// ---------------------------------------------------------------------------
+
+function storeToonTemplate(a, obj) {
+  if (a.kind === 'landscape') toonLandscapeTemplates[a.theme] = obj;
+  else if (a.kind === 'food') toonFoodTemplates[a.theme] = obj;
+  else toonTemplates[a.kind] = obj; // head / neck / body
+}
+
+// A missing Toon GLB falls back to a clone of its Classic counterpart (already
+// loaded during boot), so the style is always usable — never a wrong food or a
+// locked scene. The clone shares Classic buffers; the Toon texture pass clones
+// geometry/materials before touching them, so Classic stays pristine.
+function toonFallbackTemplate(a) {
+  if (a.kind === 'landscape') return (landscapeTemplates[a.theme] || landscapeTemplates[DEFAULT_LANDSCAPE]).clone(true);
+  if (a.kind === 'food') return (foodTemplates[a.theme] || foodTemplates[DEFAULT_LANDSCAPE]).clone(true);
+  return templates[a.kind].clone(true); // head / neck / body
+}
+
+function loadToonAsset(a) {
+  const loader = new GLTFLoader();
+  return new Promise((resolve) => {
+    loader.load(
+      `${import.meta.env.BASE_URL}assets/${a.file}`,
+      (gltf) => {
+        let obj = gltf.scene;
+        // Toon GLBs share the Classic native coordinates, so the exact same
+        // per-kind treatment applies: landscape + neck stay native (never
+        // footprint-normalized); head/body/food normalize to the shared
+        // footprints; the head then rides HEAD_LIFT and keeps its EyeSpin pivots.
+        if (a.kind === 'landscape') {
+          enableShadows(obj, { cast: true, receive: true });
+        } else if (a.kind === 'neck') {
+          enableShadows(obj, { cast: true, receive: false });
+        } else {
+          const target = a.kind === 'head' ? CELL_SIZES.head : a.kind === 'body' ? CELL_SIZES.body : CELL_SIZES.food;
+          obj = normalizeModel(obj, target);
+          enableShadows(obj, { cast: true, receive: false });
+        }
+        storeToonTemplate(a, obj);
+        setTag(a.key, 'loaded');
+        resolve();
+      },
+      undefined,
+      () => {
+        // A Toon-only failure flags the Toon status alone — never anyFallback,
+        // which describes the Classic boot assets, so a fully-loaded Classic
+        // scene never inherits a misleading "simplified graphics" status after a
+        // Toon-only fallback.
+        const fb = toonFallbackTemplate(a);
+        storeToonTemplate(a, fb);
+        toonFallback = true;
+        setTag(a.key, 'fallback');
+        resolve();
+      }
+    );
+  });
+}
+
+function loadToonTexture(t) {
+  const loader = new THREE.TextureLoader();
+  return new Promise((resolve) => {
+    loader.load(
+      `${import.meta.env.BASE_URL}assets/${t.file}`,
+      (tex) => {
+        tex.colorSpace = THREE.SRGBColorSpace;
+        tex.wrapS = tex.wrapT = THREE.MirroredRepeatWrapping;
+        toonTextures[t.key] = tex;
+        setTag(t.key, 'loaded');
+        resolve();
+      },
+      undefined,
+      () => {
+        // Texture failure settles to the authored Toon materials (no map) with a
+        // plain fallback status — it must never lock the loading state. Flags the
+        // Toon status only (not anyFallback, which is Classic-boot-scoped).
+        toonFallback = true;
+        setTag(t.key, 'fallback');
+        resolve();
+      }
+    );
+  });
+}
+
+// Clone a base tiling texture for a specific repeat count. MirroredRepeat on
+// both axes hides hard seams; sRGB + anisotropy keep the grain readable.
+function toonMap(role, repeat) {
+  const base = role === 'sand' ? toonTextures.sand : toonTextures.sandstone;
+  if (!base) return null;
+  const map = base.clone();
+  map.needsUpdate = true; // required so the cloned texture re-uploads
+  map.wrapS = map.wrapT = THREE.MirroredRepeatWrapping;
+  map.colorSpace = THREE.SRGBColorSpace;
+  map.repeat.set(repeat, repeat);
+  map.anisotropy = MAX_ANISOTROPY;
+  return map;
+}
+
+// Generate planar UVs on an ALREADY-CLONED geometry so classic geometry is
+// never mutated. Ground uses world-ish x/z scaled across the whole mesh; rocks
+// keep authored Blender UVs when present, otherwise fall back to the same planar
+// (cube-ish) projection.
+function ensurePlanarUV(geometry, mode) {
+  if (mode === 'rock' && geometry.attributes.uv) return;
+  const pos = geometry.attributes.position;
+  if (!pos) return;
+  geometry.computeBoundingBox();
+  const bb = geometry.boundingBox;
+  const sx = (bb.max.x - bb.min.x) || 1;
+  const sz = (bb.max.z - bb.min.z) || 1;
+  const uv = new Float32Array(pos.count * 2);
+  for (let i = 0; i < pos.count; i++) {
+    uv[i * 2] = (pos.getX(i) - bb.min.x) / sx;
+    uv[i * 2 + 1] = (pos.getZ(i) - bb.min.z) / sz;
+  }
+  geometry.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+}
+
+// Texture the Toon desert terrain template ONCE after both it and the textures
+// have settled. Only the named ground + rock meshes are touched; their geometry
+// and material are cloned first (so a Classic-clone fallback template never
+// leaks a mutation back into the Classic desert), then a cloned map is applied
+// on a light-neutral, high-roughness material to avoid doubling the brown tint.
+function applyToonTerrainTextures(root) {
+  if (!root) return;
+  if (!toonTextures.sand && !toonTextures.sandstone) return; // both failed → authored materials
+  root.traverse((o) => {
+    if (!o.isMesh) return;
+    const role = toonTerrainTextureFor(o.name);
+    if (!role) return;
+    const map = toonMap(role, repeatForMesh(role, o.name));
+    if (!map) return; // that specific texture failed → leave this mesh authored
+    o.geometry = o.geometry.clone();
+    ensurePlanarUV(o.geometry, role === 'sand' ? 'ground' : 'rock');
+    const src = o.material;
+    const mat = src && src.isMeshStandardMaterial ? src.clone() : new THREE.MeshStandardMaterial();
+    mat.map = map;
+    mat.color = new THREE.Color('#d8d0c4'); // light neutral so the map reads without a second tint
+    mat.roughness = Math.max(mat.roughness ?? 1, 0.9);
+    mat.metalness = 0;
+    mat.needsUpdate = true;
+    o.material = mat;
+  });
+}
+
+// Larger tiles across the wide surrounding ground (±40/45) than the 20-unit
+// clearing, so the sand grain stays a consistent physical size. Rocks tile
+// tightly for visible sandstone texture.
+function repeatForMesh(role, name) {
+  if (role !== 'sand') return 3; // rocks
+  return baseMeshName(name).startsWith('Surrounding terrain') ? 20 : 6;
+}
+
+// Lazily load the whole Toon bundle exactly once. The cached promise means
+// concurrent/repeat requests never duplicate work, and it resolves only after
+// every asset has settled (loaded or Classic fallback) and the desert terrain
+// has been textured — so the style is committed atomically by the caller.
+function loadToonBundle() {
+  if (toonBundlePromise) return toonBundlePromise;
+  ensureToonAssetRows();
+  toonBundlePromise = (async () => {
+    await Promise.all([
+      ...TOON_ASSETS.map(loadToonAsset),
+      ...TOON_TEXTURES.map(loadToonTexture),
+    ]);
+    applyToonTerrainTextures(toonLandscapeTemplates.desert);
+    toonBundleLoaded = true;
+  })();
+  return toonBundlePromise;
+}
+
+// ---------------------------------------------------------------------------
 // Scene objects driven by game state
 // ---------------------------------------------------------------------------
 
@@ -582,6 +845,39 @@ function buildSceneObjects() {
   resetInterpolation();
 }
 
+// Style-aware asset routing (consumes the pure resolver). The Toon shared rig is
+// used on every map once loaded; the detailed Toon terrain + food only replace
+// Classic on the Desert. Toon registries always hold a Classic-clone fallback
+// for any missing file, so these never return undefined once Toon is committed.
+function snakeTemplateSet() {
+  return resolveStyleAssets(styleKey, landscapeKey).snake === 'toon' ? toonTemplates : templates;
+}
+function resolveLandscapeTemplate(k) {
+  if (resolveStyleAssets(styleKey, k).landscape === 'toon' && toonLandscapeTemplates[k]) {
+    return toonLandscapeTemplates[k];
+  }
+  return landscapeTemplates[k];
+}
+function resolveFoodTemplate(k) {
+  if (resolveStyleAssets(styleKey, k).food === 'toon' && toonFoodTemplates[k]) {
+    return toonFoodTemplates[k];
+  }
+  return foodTemplates[k];
+}
+
+// Rebuild every style-dependent scene object in place — the snake rig, trailing
+// bodies, board, food, and wearable — from the currently committed style's
+// templates. Removes the old rig/bodies/board/food without disposing the shared
+// buffers the templates retain, then re-runs the normal build path (which resets
+// interpolation cleanly to READY). Landscape, camera mode, and wearables are
+// preserved; Classic ⇄ Toon leaves no material/geometry mutation behind.
+function rebuildStyleScene() {
+  clearGroup(snakeGroup); // removes yawRoot + all body meshes (no dispose)
+  bodyMeshes.length = 0;
+  headRig = null;
+  buildSceneObjects();
+}
+
 // Remove a group's children without disposing their geometries/materials: the
 // templates are reused across selections and clone(true) shares those buffers,
 // so disposing here would corrupt retained templates and other live clones.
@@ -595,17 +891,16 @@ function clearGroup(group) {
 // from the matching template, retint the palette, and refresh the theme/food
 // labels. Fully synchronous — every template is preloaded before this runs.
 function applyLandscape(k) {
-  const theme = getLandscape(k) || getLandscape(DEFAULT_LANDSCAPE);
   clearGroup(boardGroup);
-  boardGroup.add(landscapeTemplates[k].clone(true));
+  boardGroup.add(resolveLandscapeTemplate(k).clone(true));
 
   if (foodMesh) { foodGroup.remove(foodMesh); foodMesh = null; }
-  foodMesh = foodTemplates[k].clone(true);
+  foodMesh = resolveFoodTemplate(k).clone(true);
   foodGroup.add(foodMesh);
 
   attachWearable(k);
 
-  applyPalette(theme.palette);
+  applyStylePalette(k);
   placeFood();
   updateThemeLabels();
 }
@@ -623,11 +918,14 @@ function buildHeadRig() {
   const pitchChild = new THREE.Group();
   yawRoot.add(pitchChild);
 
-  const neck = templates.neck.clone(true);
+  // Classic or Toon shared rig, from the active style's templates.
+  const rig = snakeTemplateSet();
+
+  const neck = rig.neck.clone(true);
   neck.position.set(0, 0, 0);
   pitchChild.add(neck);
 
-  const head = templates.head.clone(true);
+  const head = rig.head.clone(true);
   head.position.set(0, HEAD_LIFT, 0);
   pitchChild.add(head);
 
@@ -671,8 +969,9 @@ function attachWearable(themeKey) {
 // Ensure there is one body mesh per non-head segment.
 function syncSnakeMeshes() {
   const needed = game.snake.length - 1; // excluding head
+  const rig = snakeTemplateSet();
   while (bodyMeshes.length < needed) {
-    const m = templates.body.clone(true);
+    const m = rig.body.clone(true);
     bodyMeshes.push(m);
     snakeGroup.add(m);
   }
@@ -899,18 +1198,23 @@ function cycleCamera() {
 // Input
 // ---------------------------------------------------------------------------
 
+// Gameplay is inert until the scene is built and while Toon assets stream in.
+function gameplayLocked() {
+  return !sceneReady || styleLoading;
+}
+
 function turnLeft() {
-  if (!sceneReady) return;
+  if (gameplayLocked()) return;
   if (cameraMode === 'overhead') return;
   game.turnRelative('left');
 }
 function turnRight() {
-  if (!sceneReady) return;
+  if (gameplayLocked()) return;
   if (cameraMode === 'overhead') return;
   game.turnRelative('right');
 }
 function moveAbsolute(dir) {
-  if (!sceneReady) return;
+  if (gameplayLocked()) return;
   game.queueTurn(dir);
 }
 
@@ -927,8 +1231,8 @@ window.addEventListener('keydown', (e) => {
   // Camera cycling is safe before the scene is built (it no-ops on meshes).
   if (k === 'c') { cycleCamera(); return; }
 
-  // Gameplay input is inert until the scene is fully built.
-  if (!sceneReady) return;
+  // Gameplay input is inert until the scene is fully built and while loading.
+  if (gameplayLocked()) return;
 
   if (k === ' ') { toggleStartPause(); return; }
   if (k === 'p') { if (game.status === STATUS.PLAYING || game.status === STATUS.PAUSED) game.togglePause(); syncUI(); return; }
@@ -958,12 +1262,13 @@ document.querySelectorAll('[data-move]').forEach((b) =>
 );
 el.camButtons.forEach((b) => b.addEventListener('click', () => setCameraMode(b.dataset.cam)));
 el.landButtons.forEach((b) => b.addEventListener('click', () => selectLandscape(b.dataset.land)));
+el.styleButtons.forEach((b) => b.addEventListener('click', () => selectStyle(b.dataset.style)));
 
 el.start.addEventListener('click', () => toggleStartPause());
-el.pause.addEventListener('click', () => { if (!sceneReady) return; game.togglePause(); syncUI(); });
+el.pause.addEventListener('click', () => { if (gameplayLocked()) return; game.togglePause(); syncUI(); });
 el.restart.addEventListener('click', () => startFresh());
 el.overlayBtn.addEventListener('click', () => {
-  if (!sceneReady) return;
+  if (gameplayLocked()) return;
   if (game.status === STATUS.READY) { game.start(); }
   else { startFresh(); }
   syncUI();
@@ -978,7 +1283,7 @@ document.addEventListener('visibilitychange', () => {
 });
 
 function toggleStartPause() {
-  if (!sceneReady) return;
+  if (gameplayLocked()) return;
   if (game.status === STATUS.READY) game.start();
   else if (game.status === STATUS.PLAYING) game.pause();
   else if (game.status === STATUS.PAUSED) game.resume();
@@ -987,7 +1292,7 @@ function toggleStartPause() {
 }
 
 function startFresh() {
-  if (!sceneReady) return;
+  if (gameplayLocked()) return;
   game.restart();
   resetInterpolation();
   syncUI();
@@ -1001,9 +1306,12 @@ function startFresh() {
 // selector, and the plain theme/food line in the scene panel.
 function updateThemeLabels() {
   const theme = getLandscape(landscapeKey) || getLandscape(DEFAULT_LANDSCAPE);
-  if (el.themeBadge) el.themeBadge.textContent = theme.name;
+  const scope = describeStyleScope(styleKey, landscapeKey);
+  if (el.themeBadge) el.themeBadge.textContent = styleKey === 'toon' ? `${theme.name} · Toon` : theme.name;
   if (el.landFood) el.landFood.textContent = `Food · ${theme.foodName}`;
   if (el.sceneTheme) el.sceneTheme.textContent = `${theme.name} · ${theme.foodName}`;
+  // Concise scope line beside the style selector, e.g. "Toon · Desert preview".
+  if (el.styleScope) el.styleScope.textContent = scope;
 }
 
 // Keep the selector buttons' active class + aria-pressed in sync. Disabled state
@@ -1020,7 +1328,11 @@ function updateLandscapeButtons() {
 // is allowed and whether it must reset the run to READY (never silently
 // discarding a live PLAYING/PAUSED run — those are blocked upstream).
 function selectLandscape(k) {
-  if (!sceneReady) return;
+  // Locked while the scene is still building AND while the Toon bundle streams in
+  // (the same gate as start/restart/steering), so a direct or re-entrant request
+  // respects styleLoading exactly like the disabled UI does. The PLAYING/PAUSED
+  // lock still lives in planLandscapeChange below.
+  if (gameplayLocked()) return;
   const plan = planLandscapeChange(landscapeKey, k, game.status);
   if (!plan.accepted || !plan.changed) return;
   landscapeKey = plan.key;
@@ -1032,6 +1344,76 @@ function selectLandscape(k) {
   }
   updateLandscapeButtons();
   syncUI();
+}
+
+// ---------------------------------------------------------------------------
+// Visual style selection (Classic / Toon)
+// ---------------------------------------------------------------------------
+
+// Keep the style buttons' active class + aria-pressed in sync with the committed
+// style. Disabled state is owned by syncUI()/setLoadingState().
+function updateStyleButtons() {
+  el.styleButtons.forEach((b) => {
+    const on = b.dataset.style === styleKey;
+    b.classList.toggle('active', on);
+    b.setAttribute('aria-pressed', on ? 'true' : 'false');
+  });
+}
+
+// Enter the Toon-loading state: keep the complete current scene visible, show a
+// plain "Loading Toon style" status, and lock gameplay + both selectors until
+// the bundle settles. Camera controls stay usable.
+function beginStyleLoading() {
+  styleLoading = true;
+  updateSceneStatus('loading');
+  syncUI();
+}
+function endStyleLoading() {
+  styleLoading = false;
+  updateSceneStatus('ready');
+  syncUI();
+}
+
+// Commit a fully-resolved style: persist it, rebuild the scene from the style's
+// templates, and (on a real change) reset the run to READY — preserving the
+// landscape, camera, and wearables. Called only once the required assets exist.
+function commitStyle(k, resetToReady) {
+  styleKey = k;
+  localStorage.setItem('snake3d-style', k);
+  if (resetToReady) game.reset(); // back to READY, not playing — no silent active-run reset
+  rebuildStyleScene();
+  updateStyleButtons();
+  updateThemeLabels();
+  updateSceneStatus('ready');
+  updateRigVisibility();
+  syncUI();
+}
+
+// Handle a style button press. The pure planner decides whether the change is
+// allowed (valid key, editable status, not mid-load) and whether it resets the
+// run. Toon lazily loads its bundle first (old scene stays visible); the style +
+// localStorage are committed only when the whole bundle resolves. Guards against
+// stale async completion via a per-request token.
+async function selectStyle(k) {
+  if (!sceneReady) return;
+  const plan = planStyleChange(styleKey, k, game.status, styleLoading);
+  if (!plan.accepted || !plan.changed) return;
+
+  if (plan.key === 'toon' && !toonBundleLoaded) {
+    const token = ++styleToken;
+    beginStyleLoading();
+    await loadToonBundle(); // individual assets never reject (they fall back)
+    if (token !== styleToken) return; // a newer request superseded this one
+    endStyleLoading();
+    // Re-validate against the (possibly changed) status before committing.
+    const settled = planStyleChange(styleKey, k, game.status, false);
+    if (!settled.accepted || !settled.changed) return;
+    commitStyle(settled.key, settled.resetToReady);
+    return;
+  }
+
+  // Classic (assets already present) or Toon already cached: synchronous.
+  commitStyle(plan.key, plan.resetToReady);
 }
 
 // ---------------------------------------------------------------------------
@@ -1078,16 +1460,28 @@ function syncUI() {
 
   const playing = game.status === STATUS.PLAYING;
   const paused = game.status === STATUS.PAUSED;
-  el.start.textContent = game.status === STATUS.READY ? 'Start' : playing ? 'Pause' : paused ? 'Resume' : 'Play again';
+  el.start.textContent = styleLoading ? 'Loading…'
+    : game.status === STATUS.READY ? 'Start' : playing ? 'Pause' : paused ? 'Resume' : 'Play again';
   el.start.classList.toggle('primary', true);
-  el.pause.disabled = !(playing || paused);
+  // Gameplay controls are disabled while the Toon bundle streams in.
+  el.start.disabled = styleLoading;
+  el.restart.disabled = styleLoading;
+  el.overlayBtn.disabled = styleLoading;
+  el.pause.disabled = styleLoading || !(playing || paused);
   el.pause.textContent = paused ? 'Resume' : 'Pause';
 
-  // Landscape selection is only editable in READY/OVER/WON; locked mid-run.
-  const landLock = playing || paused;
+  // Both selectors are only editable in READY/OVER/WON, and both are locked
+  // while a run is live (never a silent reset) or while Toon assets stream in.
+  const selectorLock = playing || paused || styleLoading;
   el.landButtons.forEach((b) => {
-    b.disabled = landLock;
+    b.disabled = selectorLock;
     const on = b.dataset.land === landscapeKey;
+    b.classList.toggle('active', on);
+    b.setAttribute('aria-pressed', on ? 'true' : 'false');
+  });
+  el.styleButtons.forEach((b) => {
+    b.disabled = selectorLock;
+    const on = b.dataset.style === styleKey;
     b.classList.toggle('active', on);
     b.setAttribute('aria-pressed', on ? 'true' : 'false');
   });
@@ -1198,6 +1592,7 @@ function setLoadingState(loading) {
   el.restart.disabled = loading;
   el.overlayBtn.disabled = loading;
   el.landButtons.forEach((b) => { b.disabled = loading; });
+  el.styleButtons.forEach((b) => { b.disabled = loading; });
   if (loading) {
     el.start.textContent = 'Loading…';
     el.pause.disabled = true;
@@ -1214,14 +1609,17 @@ async function boot() {
   updateInstructions();
   updateThemeLabels();
   updateLandscapeButtons();
+  updateStyleButtons();
   syncUI();
   el.best.textContent = best;
   setLoadingState(true);
 
+  // Classic-only boot: the Toon bundle is never requested here (lazy).
   await Promise.all(ASSETS.map(loadAsset));
   buildSceneObjects();
   updateRigVisibility();
   updateLandscapeButtons();
+  updateStyleButtons();
 
   updateSceneStatus('ready');
   sceneReady = true;
@@ -1231,6 +1629,11 @@ async function boot() {
   resize();
   clock.start();
   animate();
+
+  // A persisted Toon preference is honoured through the normal lazy-load path
+  // once the loop is running, so the complete Classic scene stays visible with a
+  // "Loading Toon style" status until the whole Toon bundle resolves.
+  if (persistedStyle === 'toon') selectStyle('toon');
 }
 
 boot();

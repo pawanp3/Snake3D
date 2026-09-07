@@ -36,6 +36,15 @@ Build a 3D version of the classic Nokia Snake game in Three.js, with a green Nok
 - Keep the chosen landscape on restart; landscape selection is available before a run or after it ends, not during active or paused gameplay.
 - Landscape-specific wearables: a beanie and scarf in the tundra, sunglasses in the desert, and no accessories in the park. Wearables follow the character animation and switch with the landscape. Desert sunglasses stay tilted on top of the head in every game state, leaving the eyes visible, including the spinning cartoon eyes on collision.
 
+## Visual styles
+
+- Choose Classic or Toon before a run; retain the choice on restart and between visits. Lock changes during active or paused play and asset loading.
+- Classic preserves the existing low-poly presentation. Toon targets polished stylized mobile-game art: rounded chunky silhouettes, rich colors, soft lighting, restrained hand-painted texture detail, and original character designs.
+- First deliverable is a playable Toon desert prototype with rounded sandstone/cacti, generated sand and sandstone textures, smoother snake and fruit, and improved lighting. Park and tundra retain their existing scenery in this first pass, with the shared Toon snake.
+- Use image-gen for painted image textures wherever suitable; use Blender for geometry and materials. Validate texture scale and seams inside the game.
+- Preserve gameplay, all three cameras, neck rocking, crash eye spins, and map accessories including the permanently perched desert glasses.
+- Lazy-load the additional style assets, keep Classic available if loading fails, and support GitHub Pages under the repository URL prefix.
+
 ## Assets and implementation
 
 - Use Blender installed on this computer to create snake head, body segment, food, and board assets.

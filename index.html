@@ -69,6 +69,14 @@
          horizontal overflow on narrow (~390px) phones. */
       .topbar-land { gap: 8px; min-width: 0; }
       .topbar-land .btn-grid { gap: 8px; }
+      /* Compact 2-option visual-style selector, sitting beside the landscape
+         chooser in the topbar. Two equal columns stay tidy down to ~390px. */
+      .topbar-style { gap: 8px; min-width: 0; }
+      .btn-grid.two { grid-template-columns: 1fr 1fr; gap: 8px; }
+      .style-scope {
+        font-family: var(--mono); font-size: 12px; letter-spacing: 1px;
+        color: var(--lime-soft); margin: -2px 2px 0;
+      }
 
       .brand {
         display: flex;
@@ -147,7 +155,8 @@
         box-shadow: 0 0 18px rgba(184, 255, 58, 0.25);
       }
       button.cam.active,
-      button.land.active {
+      button.land.active,
+      button.style.active {
         background: linear-gradient(160deg, var(--lime), var(--lime-dim));
         color: #07200f; border-color: transparent;
       }
@@ -352,6 +361,15 @@
             <button class="land" data-land="tundra" aria-pressed="false">Frozen Tundra</button>
           </div>
           <div class="land-food" id="landFood">Food · Apple</div>
+        </div>
+
+        <div class="side-block topbar-style">
+          <div class="section-title">Visual style</div>
+          <div class="btn-grid two" id="styleButtons" role="group" aria-label="Visual style">
+            <button class="style active" data-style="classic" aria-pressed="true">Classic</button>
+            <button class="style" data-style="toon" aria-pressed="false">Toon</button>
+          </div>
+          <div class="style-scope" id="styleScope">Classic</div>
         </div>
       </header>
 

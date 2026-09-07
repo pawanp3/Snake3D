@@ -161,3 +161,14 @@ Parent browser verification completed:
 
 - Browser crash view visually checked: desert sunglasses sit tilted on the crown with both eyes visible.
 - Pose applies only to fresh accessory clones; collision and restart do not move the glasses relative to the head.
+
+## Toon desert prototype — September 7, 2026
+
+- All 50 Node tests pass, including style selection/routing and actual GLTFLoader-sanitized texture-name regressions. Production build passes; existing large-JavaScript-chunk advisory remains.
+- Five Blender-generated Toon GLBs parse successfully. Eye pivots, native neck height, and accessory alignment preserved. All 47 intended terrain texture targets match the renderer rules.
+- Browser: Classic → Toon → Classic restores original scenery/materials/sky; Toon desert visibly uses generated sand and sandstone textures, rounded scenery, and brighter daylight.
+- Phone-width 390×844 layout checked: landscape/style selectors fit above the stage, with no horizontal overflow visible. Paused run disables both selectors; first-person view hides the character as expected.
+- Toon run eats the first fruit, reaches score 1, and ends on wall collision. Crash face and permanently perched sunglasses remain visible.
+- Production preview served using `npm run preview -- --host 127.0.0.1 --base /Snake3D/`. All five Toon GLBs and both WebP textures report loaded under this path; no browser warnings/errors in the fresh production tab. Reload retains Toon + Desert preference.
+- Code review confirms cached lazy loading, settling asset-error callbacks, Classic material isolation, and separate Toon fallback status. Missing-asset recovery was reviewed in code, not network-fault-injected in the browser.
+- Park/tundra scenery remains Classic in this prototype; those maps use the shared smoother Toon snake. Real low-end mobile device performance has not been benchmarked.

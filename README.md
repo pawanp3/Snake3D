@@ -98,6 +98,48 @@ same named `ShadesPivot`) keeps the behaviour intact. The which‑map + fixed
 shades‑perch rules live in a small pure module (`src/wearables.js`) with its own
 `node:test` suite.
 
+## Visual style (Classic / Toon)
+
+Independently of the landscape you can pick a **visual style** from a compact
+two‑option selector in the topbar (beside the landscape chooser, before Start):
+
+- **Classic** (default) — the original shared snake rig and per‑map scenery/food.
+- **Toon** — an upgraded shared snake on **every** map, plus a detailed,
+  **textured** terrain + food prototype that exists specifically for the
+  **Desert**. On other maps the Toon snake keeps the corresponding Classic
+  scenery and food. A concise scope line (e.g. *“Toon · Desert preview”* or
+  *“Toon · snake only”*) explains what the current style covers.
+
+Your choice is persisted in `localStorage` and retained across restart. Both
+selectors are editable only while **Ready / Game Over / You Win!** — locked
+during **Playing / Paused** (never a silent active‑run reset) and while Toon
+assets load. Switching to a *different* style resets the run to **Ready**,
+preserving the landscape, camera, and wearables; re‑selecting the current style
+is a no‑op.
+
+**Lazy loading.** The five Toon GLBs (`toon-head`, `toon-neck`, `toon-body`,
+`toon-landscape-desert`, `toon-food-desert`) plus two compressed WebP tiling
+textures (`textures/toon/desert-sand.webp`, `sandstone.webp`) are fetched **only** on the
+first Toon selection (or at boot when Toon was persisted) — never on a Classic
+boot — as one cached promise, so requests are never duplicated. The complete
+current scene stays visible under a plain **“Loading Toon style”** status while
+gameplay and both selectors are disabled; the style and `localStorage` are
+committed only once the whole bundle resolves. All URLs are base‑path safe for
+GitHub Pages via `import.meta.env.BASE_URL`.
+
+**Fallbacks.** A missing Toon GLB falls back to a clone of its Classic
+counterpart and a missing texture to the authored Toon materials, always
+settling into a usable scene with **“some visual details unavailable”** — never
+locked, never a mismatched food. Classic templates, materials, and geometry are
+never mutated (Toon lives in separate registries; the desert texture pass clones
+geometry + materials first), so Classic → Toon → Classic restores the originals
+exactly. The Toon desert sand map tiles the `Playing clearing` and `Surrounding
+terrain` ground (larger repeat on the wide surrounds); the sandstone map tiles
+the `Desert rock` / `Rounded sandstone stack` / `Sandstone pebble` families (Dune
+meshes are left untouched), on light‑neutral high‑roughness materials so the grain
+reads without doubling the brown tint. The style/routing/texture rules are a
+small pure module (`src/styles.js`) with its own `node:test` suite.
+
 ## Design notes
 
 - **Logic is pure.** `src/game.js` (`SnakeGame`) has no rendering dependencies:
@@ -140,8 +182,9 @@ src/game.js       Pure, testable game logic
 src/landscapes.js Pure landscape palettes + selection/reset rules
 src/animation.js  Pure character-animation state
 src/wearables.js  Pure map→wearable + fixed shades crown-perch rules
+src/styles.js     Pure Classic/Toon selection, asset routing, texture routing
 src/main.js       Three.js scene, rendering, cameras, input, UI wiring
-tests/            node:test suites (game, landscapes, animation, wearables)
+tests/            node:test suites (game, landscapes, animation, wearables, styles)
 public/assets/    GLB models created in Blender
 assets/          Editable Blender source, preview, and asset documentation
 scripts/         Blender asset-generation script

@@ -1,0 +1,420 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <meta name="theme-color" content="#071710" />
+    <title>SNAKE · 3D</title>
+    <style>
+      :root {
+        --bg: #061710;
+        --bg-2: #0a2417;
+        --panel: #0d2c1c;
+        --panel-line: #1c5a37;
+        --lime: #b8ff3a;
+        --lime-dim: #7fbf2e;
+        --lime-soft: #d7ff86;
+        --text: #cfe6d4;
+        --text-dim: #6f9b7f;
+        --danger: #ff6b5e;
+        --shadow: 0 18px 50px rgba(0, 0, 0, 0.55);
+        --mono: ui-monospace, "SFMono-Regular", "Menlo", "Consolas", monospace;
+        --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      }
+
+      * { box-sizing: border-box; }
+
+      html, body {
+        margin: 0;
+        height: 100%;
+        overflow: hidden;
+        background: radial-gradient(1200px 800px at 70% -10%, #0d3320 0%, var(--bg) 55%);
+        color: var(--text);
+        font-family: var(--sans);
+        -webkit-font-smoothing: antialiased;
+        touch-action: none;
+      }
+
+      #app {
+        height: 100%;
+        display: grid;
+        grid-template-columns: 340px 1fr;
+        grid-template-rows: auto minmax(0, 1fr);
+        grid-template-areas:
+          "top   stage"
+          "ctrl  stage";
+        gap: 18px;
+        padding: 18px;
+      }
+
+      /* ---------- Side panel ---------- */
+      .topbar {
+        grid-area: top;
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
+      }
+      .controls {
+        grid-area: ctrl;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
+        overflow-y: auto;
+      }
+      .side-block { display: flex; flex-direction: column; gap: 12px; }
+      /* Landscape chooser promoted into the topbar: keep it compact so the
+         three options and food label sit tidily above the stage, with no
+         horizontal overflow on narrow (~390px) phones. */
+      .topbar-land { gap: 8px; min-width: 0; }
+      .topbar-land .btn-grid { gap: 8px; }
+
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        padding: 18px 20px;
+        background: linear-gradient(160deg, var(--panel) 0%, var(--bg-2) 100%);
+        border: 1px solid var(--panel-line);
+        border-radius: 18px;
+        box-shadow: var(--shadow);
+      }
+      .brand .logo {
+        width: 52px; height: 52px;
+        border-radius: 13px;
+        display: grid; place-items: center;
+        background: linear-gradient(160deg, var(--lime), var(--lime-dim));
+        box-shadow: 0 0 22px rgba(184, 255, 58, 0.35), inset 0 0 0 2px rgba(0,0,0,0.15);
+      }
+      .brand .logo::before {
+        content: ""; width: 22px; height: 22px; border-radius: 6px;
+        background: #08200f;
+        box-shadow: 12px 0 0 -4px #08200f, -2px 12px 0 -4px #08200f;
+      }
+      .brand h1 {
+        margin: 0; line-height: 0.95; letter-spacing: 2px;
+        font-weight: 800; font-size: 30px; color: var(--lime-soft);
+      }
+      .brand h1 small {
+        display: block; font-size: 13px; letter-spacing: 7px;
+        color: var(--lime-dim); font-weight: 700; margin-top: 4px;
+      }
+
+      .cards { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+      .card {
+        background: var(--panel);
+        border: 1px solid var(--panel-line);
+        border-radius: 14px;
+        padding: 14px 16px;
+      }
+      .card.wide { grid-column: 1 / -1; }
+      .card .label {
+        font-size: 11px; letter-spacing: 2px; text-transform: uppercase;
+        color: var(--text-dim); font-weight: 700;
+      }
+      .card .value {
+        font-family: var(--mono); font-size: 30px; font-weight: 700;
+        color: var(--lime-soft); margin-top: 4px;
+      }
+      #statusValue { font-size: 22px; color: var(--lime); }
+      #statusValue.over { color: var(--danger); }
+      #statusValue.won { color: var(--lime); }
+
+      .section-title {
+        font-size: 11px; letter-spacing: 2px; text-transform: uppercase;
+        color: var(--text-dim); font-weight: 700; margin: 2px 2px -4px;
+      }
+
+      .btn-row { display: flex; gap: 10px; }
+      .btn-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; }
+
+      button {
+        appearance: none; border: 1px solid var(--panel-line);
+        background: var(--panel); color: var(--text);
+        font-family: var(--sans); font-weight: 700; font-size: 14px;
+        padding: 12px 14px; border-radius: 12px; cursor: pointer;
+        transition: transform 0.05s ease, background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+        flex: 1; user-select: none; -webkit-tap-highlight-color: transparent;
+        min-height: 44px;
+      }
+      button:hover { border-color: var(--lime-dim); }
+      button:active { transform: translateY(1px); }
+      button:disabled { opacity: 0.4; cursor: default; }
+      button.primary {
+        background: linear-gradient(160deg, var(--lime), var(--lime-dim));
+        color: #07200f; border-color: transparent;
+        box-shadow: 0 0 18px rgba(184, 255, 58, 0.25);
+      }
+      button.cam.active,
+      button.land.active {
+        background: linear-gradient(160deg, var(--lime), var(--lime-dim));
+        color: #07200f; border-color: transparent;
+      }
+      /* Landscape buttons hold longer names — allow them to wrap tidily. */
+      button.land {
+        font-size: 13px; line-height: 1.15; padding: 10px 10px;
+        white-space: normal;
+      }
+      .land-food {
+        font-family: var(--mono); font-size: 12px; letter-spacing: 1px;
+        color: var(--lime-soft); margin: -2px 2px 0;
+      }
+
+      .instructions {
+        background: var(--bg-2);
+        border: 1px dashed var(--panel-line);
+        border-radius: 14px; padding: 14px 16px;
+        font-size: 13px; line-height: 1.5; color: var(--text);
+      }
+      .instructions b { color: var(--lime-soft); }
+      .instructions .keys { color: var(--text-dim); margin-top: 6px; font-size: 12px; }
+
+      .assets {
+        background: var(--panel); border: 1px solid var(--panel-line);
+        border-radius: 14px; padding: 12px 16px;
+      }
+      .scene-status {
+        display: flex; align-items: center; gap: 9px;
+        font-size: 11px; letter-spacing: 2px; text-transform: uppercase;
+        color: var(--text-dim); font-weight: 700;
+      }
+      .scene-status::before {
+        content: ""; width: 9px; height: 9px; border-radius: 50%; flex: none;
+        background: var(--lime-dim); box-shadow: 0 0 8px rgba(184, 255, 58, 0.4);
+      }
+      .scene-status.loading { color: var(--lime-soft); }
+      .scene-status.loading::before { background: var(--lime-soft); animation: statusPulse 1s ease-in-out infinite; }
+      .scene-status.ready { color: var(--lime-soft); }
+      .scene-status.ready::before { background: var(--lime); }
+      .scene-status.fallback { color: #ffcf5e; }
+      .scene-status.fallback::before { background: #ffcf5e; box-shadow: 0 0 8px rgba(255, 207, 94, 0.45); }
+      @keyframes statusPulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+
+      .scene-details { margin-top: 10px; }
+      .scene-details summary {
+        cursor: pointer; list-style: none; padding: 4px 0;
+        font-size: 11px; letter-spacing: 2px; text-transform: uppercase;
+        color: var(--text-dim); font-weight: 700; user-select: none;
+      }
+      .scene-details summary::-webkit-details-marker { display: none; }
+      .scene-details summary::before { content: "▸"; color: var(--lime-dim); margin-right: 6px; font-size: 10px; }
+      .scene-details[open] summary::before { content: "▾"; }
+      .scene-details summary:hover { color: var(--lime-soft); }
+      .scene-details ul { margin-top: 8px; }
+      .assets ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+      .assets li {
+        display: flex; align-items: center; justify-content: space-between;
+        font-size: 12px; font-family: var(--mono); color: var(--text-dim);
+      }
+      .tag {
+        font-size: 10px; letter-spacing: 1px; text-transform: uppercase;
+        padding: 3px 8px; border-radius: 999px; font-weight: 700;
+        border: 1px solid var(--panel-line); color: var(--text-dim);
+      }
+      .tag.loading { color: var(--lime-soft); border-color: var(--lime-dim); }
+      .tag.loaded { color: #07200f; background: var(--lime); border-color: transparent; }
+      .tag.fallback { color: #07200f; background: #ffcf5e; border-color: transparent; }
+
+      /* ---------- Stage ---------- */
+      .stage {
+        grid-area: stage;
+        position: relative; min-width: 0; min-height: 0;
+        border: 1px solid var(--panel-line); border-radius: 20px;
+        overflow: hidden; background: #04120c; box-shadow: var(--shadow);
+      }
+      #scene { display: block; width: 100%; height: 100%; }
+
+      /* Compact banner pinned to the bottom, with no dim or blur, so the
+         rocking character and its eyes stay clearly visible behind it. The
+         container ignores pointer events; only the card is interactive. */
+      .overlay {
+        position: absolute; inset: 0; display: flex;
+        align-items: flex-end; justify-content: center;
+        padding: 16px; background: none; pointer-events: none;
+      }
+      .overlay.hidden { display: none; }
+      .overlay .card-lg {
+        pointer-events: auto;
+        display: flex; flex-direction: column; align-items: center;
+        background: linear-gradient(160deg, rgba(13, 44, 28, 0.92), rgba(10, 36, 23, 0.92));
+        border: 1px solid var(--panel-line); border-radius: 16px;
+        padding: 14px 22px; box-shadow: var(--shadow);
+        max-width: min(520px, 92%); text-align: center; backdrop-filter: none;
+      }
+      .overlay h2 { margin: 0 0 4px; font-size: 18px; color: var(--lime-soft); letter-spacing: 1px; }
+      .overlay p { margin: 0 0 10px; color: var(--text-dim); font-size: 12.5px; line-height: 1.4; }
+      .overlay .big-score { font-family: var(--mono); font-size: 26px; color: var(--lime); margin: 2px 0 8px; }
+
+      .cam-badge {
+        position: absolute; top: 14px; left: 14px;
+        font-family: var(--mono); font-size: 12px; letter-spacing: 1px;
+        color: var(--lime-soft); background: rgba(6,26,16,0.7);
+        border: 1px solid var(--panel-line); border-radius: 999px;
+        padding: 6px 12px; pointer-events: none;
+      }
+      /* Selected landscape, top-right, so it never crowds the camera badge. */
+      .theme-badge {
+        position: absolute; top: 14px; right: 14px;
+        font-family: var(--mono); font-size: 12px; letter-spacing: 1px;
+        color: var(--lime-soft); background: rgba(6,26,16,0.7);
+        border: 1px solid var(--panel-line); border-radius: 999px;
+        padding: 6px 12px; pointer-events: none; max-width: 45%;
+        text-align: right;
+      }
+      .scene-theme {
+        margin-top: 8px; font-size: 11px; letter-spacing: 2px;
+        text-transform: uppercase; color: var(--text-dim); font-weight: 700;
+      }
+
+      /* On-screen touch controls */
+      .touch {
+        position: absolute; bottom: 16px; left: 0; right: 0;
+        display: flex; justify-content: center; gap: 14px; pointer-events: none;
+      }
+      .touch .pad, .touch .lr { pointer-events: auto; }
+      .touch button {
+        width: 64px; height: 64px; flex: none; border-radius: 16px;
+        font-size: 24px; background: rgba(9, 34, 21, 0.82);
+        border-color: var(--panel-line); color: var(--lime-soft);
+      }
+      .touch .lr { display: flex; gap: 14px; }
+      .touch .pad {
+        display: grid; grid-template-columns: repeat(3, 64px);
+        grid-template-rows: repeat(2, 64px); gap: 8px;
+      }
+      .touch .pad .up { grid-column: 2; grid-row: 1; }
+      .touch .pad .left { grid-column: 1; grid-row: 2; }
+      .touch .pad .down { grid-column: 2; grid-row: 2; }
+      .touch .pad .right { grid-column: 3; grid-row: 2; }
+      .touch.hidden { display: none; }
+      .hidden { display: none !important; }
+
+      @media (max-width: 860px) {
+        /* Let the document scroll normally with the finger on narrow screens. */
+        html, body { height: auto; min-height: 100%; overflow: visible; touch-action: pan-y; }
+
+        /* Compact header on top, prominent game stage next, controls below. */
+        #app {
+          height: auto; min-height: 100%;
+          grid-template-columns: 1fr;
+          grid-template-rows: auto auto auto;
+          grid-template-areas:
+            "top"
+            "stage"
+            "ctrl";
+          padding: 12px; gap: 12px;
+        }
+
+        .topbar { gap: 10px; }
+        .brand { padding: 12px 16px; }
+        .brand h1 { font-size: 22px; }
+        .brand .logo { width: 42px; height: 42px; }
+
+        /* Score / Best / Status share one compact strip. */
+        .cards { grid-template-columns: repeat(3, 1fr); gap: 8px; }
+        .card { padding: 10px 12px; }
+        .card .value { font-size: 20px; margin-top: 2px; }
+        .card.wide { grid-column: auto; }
+        #statusValue { font-size: 16px; }
+
+        /* Keep the play area clearly visible and comfortably tall. */
+        .stage { height: 58vh; min-height: 320px; touch-action: none; }
+
+        .controls { overflow: visible; gap: 12px; }
+        .instructions { font-size: 12px; padding: 12px 14px; }
+      }
+      @media (max-width: 520px) {
+        .touch button { width: 54px; height: 54px; }
+        .touch .pad { grid-template-columns: repeat(3, 54px); grid-template-rows: repeat(2, 54px); }
+      }
+    </style>
+  </head>
+  <body>
+    <div id="app">
+      <header class="topbar">
+        <div class="brand">
+          <div class="logo"></div>
+          <h1>SNAKE<small>3D</small></h1>
+        </div>
+
+        <div class="cards">
+          <div class="card"><div class="label">Score</div><div class="value" id="scoreValue">0</div></div>
+          <div class="card"><div class="label">Best</div><div class="value" id="bestValue">0</div></div>
+          <div class="card wide"><div class="label">Status</div><div class="value" id="statusValue">Ready</div></div>
+        </div>
+
+        <div class="side-block topbar-land">
+          <div class="section-title">Landscape</div>
+          <div class="btn-grid" id="landscapeButtons" role="group" aria-label="Landscape">
+            <button class="land active" data-land="park" aria-pressed="true">City Park</button>
+            <button class="land" data-land="desert" aria-pressed="false">Desert</button>
+            <button class="land" data-land="tundra" aria-pressed="false">Frozen Tundra</button>
+          </div>
+          <div class="land-food" id="landFood">Food · Apple</div>
+        </div>
+      </header>
+
+      <aside class="controls">
+        <div class="side-block">
+          <div class="section-title">Game</div>
+          <div class="btn-row">
+            <button id="startBtn" class="primary">Start</button>
+            <button id="pauseBtn" disabled>Pause</button>
+            <button id="restartBtn">Restart</button>
+          </div>
+
+          <div class="section-title">Camera</div>
+          <div class="btn-grid">
+            <button class="cam active" data-cam="follow">Follow</button>
+            <button class="cam" data-cam="first">First person</button>
+            <button class="cam" data-cam="overhead">Overhead</button>
+          </div>
+
+          <div class="instructions" id="instructions"></div>
+        </div>
+
+        <div class="assets">
+          <div class="scene-status loading" id="sceneStatus">Loading scene</div>
+          <div class="scene-theme" id="sceneTheme">City Park · Apple</div>
+          <details class="scene-details">
+            <summary>Scene details</summary>
+            <ul id="assetList"></ul>
+          </details>
+        </div>
+      </aside>
+
+      <main class="stage">
+        <canvas id="scene"></canvas>
+        <div class="cam-badge" id="camBadge">Follow camera</div>
+        <div class="theme-badge" id="themeBadge">City Park</div>
+
+        <div class="touch" id="touchLR">
+          <div class="lr">
+            <button data-turn="left">◀</button>
+            <button data-turn="right">▶</button>
+          </div>
+        </div>
+        <div class="touch hidden" id="touchPad">
+          <div class="pad">
+            <button class="up" data-move="north">▲</button>
+            <button class="left" data-move="west">◀</button>
+            <button class="down" data-move="south">▼</button>
+            <button class="right" data-move="east">▶</button>
+          </div>
+        </div>
+
+        <div class="overlay" id="overlay">
+          <div class="card-lg">
+            <h2 id="overlayTitle">SNAKE · 3D</h2>
+            <div class="big-score hidden" id="overlayScore">0</div>
+            <p id="overlayText">Eat the glowing food, grow long, and don't hit the walls or yourself.</p>
+            <button class="primary" id="overlayBtn" style="flex:none;padding:12px 28px;">Start game</button>
+          </div>
+        </div>
+      </main>
+    </div>
+
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>

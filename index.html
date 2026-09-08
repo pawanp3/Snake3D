@@ -156,7 +156,8 @@
       }
       button.cam.active,
       button.land.active,
-      button.style.active {
+      button.style.active,
+      button.music-toggle.active {
         background: linear-gradient(160deg, var(--lime), var(--lime-dim));
         color: #07200f; border-color: transparent;
       }
@@ -193,6 +194,7 @@
         font-family: var(--mono); font-size: 12px; color: var(--lime-soft);
         width: 30px; text-align: right;
       }
+      .music-toggle { width: 100%; margin-top: 10px; }
 
       .instructions {
         background: var(--bg-2);
@@ -408,6 +410,7 @@
                    aria-label="Volume" />
             <span class="volume-val" id="volumeVal">60</span>
           </div>
+          <button class="music-toggle active" id="musicBtn" type="button" aria-pressed="true">♪ Music: On</button>
         </div>
 
         <div class="assets">

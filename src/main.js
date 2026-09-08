@@ -1,7 +1,10 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { SnakeGame, DIRECTIONS, STATUS } from './game.js';
-import { sfx, unlockAudio, getVolume, setVolume } from './sfx.js';
+import {
+  sfx, unlockAudio, getVolume, setVolume,
+  setMusicPlaying, setMusicEnabled, isMusicEnabled, playGameOverClip,
+} from './sfx.js';
 import { CharacterAnimator } from './animation.js';
 import {
   LANDSCAPES,
@@ -81,6 +84,7 @@ const el = {
   muteBtn: document.getElementById('muteBtn'),
   volumeSlider: document.getElementById('volumeSlider'),
   volumeVal: document.getElementById('volumeVal'),
+  musicBtn: document.getElementById('musicBtn'),
 };
 
 // ---------------------------------------------------------------------------
@@ -1017,7 +1021,7 @@ function doStep() {
     fromCells[i] = i < old.length ? old[i] : next[i];
   }
   if (result.ate) { placeFood(); sfx.eat(); }
-  if (result.dead) sfx.over();
+  if (result.dead) { sfx.over(); playGameOverClip(); }
   return result;
 }
 
@@ -1301,6 +1305,22 @@ el.muteBtn.addEventListener('click', () => {
 
 syncVolumeUI();
 
+// Music toggle — switches the background loop on/off (persisted in sfx.js).
+function syncMusicUI() {
+  const on = isMusicEnabled();
+  el.musicBtn.classList.toggle('active', on);
+  el.musicBtn.setAttribute('aria-pressed', on ? 'true' : 'false');
+  el.musicBtn.textContent = on ? '♪ Music: On' : '♪ Music: Off';
+}
+
+el.musicBtn.addEventListener('click', () => {
+  setMusicEnabled(!isMusicEnabled());
+  unlockAudio();
+  syncMusicUI();
+});
+
+syncMusicUI();
+
 el.overlayBtn.addEventListener('click', () => {
   if (gameplayLocked()) return;
   if (game.status === STATUS.READY) { game.start(); unlockAudio(); sfx.start(); }
@@ -1493,6 +1513,9 @@ function syncUI() {
 
   const playing = game.status === STATUS.PLAYING;
   const paused = game.status === STATUS.PAUSED;
+  // Background music loops only while actively playing; the toggle in the Sound
+  // panel governs whether it is audible.
+  setMusicPlaying(playing);
   // Gameplay controls are disabled while the Toon bundle streams in.
   el.overlayBtn.disabled = styleLoading;
 

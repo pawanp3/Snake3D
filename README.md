@@ -4,6 +4,8 @@ A 3D take on the classic Nokia Snake, built with **Three.js** and **Vite**.
 Classic grid logic drives the game while the snake and cameras move with smooth
 interpolation. Dark‑green, Nokia‑lime interface.
 
+> **Note:** This project was completely created by AI. A human has not reviewed the code or instructions here.
+
 ## Quick start
 
 ```bash

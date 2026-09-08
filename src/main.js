@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { SnakeGame, DIRECTIONS, STATUS } from './game.js';
+import { sfx, unlockAudio, getVolume, setVolume } from './sfx.js';
 import { CharacterAnimator } from './animation.js';
 import {
   LANDSCAPES,
@@ -59,11 +60,7 @@ const el = {
   score: document.getElementById('scoreValue'),
   best: document.getElementById('bestValue'),
   status: document.getElementById('statusValue'),
-  start: document.getElementById('startBtn'),
-  pause: document.getElementById('pauseBtn'),
-  restart: document.getElementById('restartBtn'),
   instructions: document.getElementById('instructions'),
-  assetList: document.getElementById('assetList'),
   sceneStatus: document.getElementById('sceneStatus'),
   camBadge: document.getElementById('camBadge'),
   camButtons: Array.from(document.querySelectorAll('.cam')),
@@ -81,6 +78,9 @@ const el = {
   themeBadge: document.getElementById('themeBadge'),
   styleButtons: Array.from(document.querySelectorAll('.style')),
   styleScope: document.getElementById('styleScope'),
+  muteBtn: document.getElementById('muteBtn'),
+  volumeSlider: document.getElementById('volumeSlider'),
+  volumeVal: document.getElementById('volumeVal'),
 };
 
 // ---------------------------------------------------------------------------
@@ -259,6 +259,7 @@ function updateSceneStatus(state) {
 }
 
 function addAssetRow(key, label) {
+  if (!el.assetList) return;
   const li = document.createElement('li');
   const name = document.createElement('span');
   name.textContent = label;
@@ -271,6 +272,7 @@ function addAssetRow(key, label) {
 }
 
 function renderAssetList() {
+  if (!el.assetList) return;
   el.assetList.innerHTML = '';
   for (const a of ASSETS) addAssetRow(a.key, a.label);
 }
@@ -1014,7 +1016,8 @@ function doStep() {
     toCells[i] = next[i];
     fromCells[i] = i < old.length ? old[i] : next[i];
   }
-  if (result.ate) placeFood();
+  if (result.ate) { placeFood(); sfx.eat(); }
+  if (result.dead) sfx.over();
   return result;
 }
 
@@ -1206,16 +1209,16 @@ function gameplayLocked() {
 function turnLeft() {
   if (gameplayLocked()) return;
   if (cameraMode === 'overhead') return;
-  game.turnRelative('left');
+  if (game.turnRelative('left')) sfx.turn();
 }
 function turnRight() {
   if (gameplayLocked()) return;
   if (cameraMode === 'overhead') return;
-  game.turnRelative('right');
+  if (game.turnRelative('right')) sfx.turn();
 }
 function moveAbsolute(dir) {
   if (gameplayLocked()) return;
-  game.queueTurn(dir);
+  if (game.queueTurn(dir)) sfx.turn();
 }
 
 window.addEventListener('keydown', (e) => {
@@ -1264,12 +1267,43 @@ el.camButtons.forEach((b) => b.addEventListener('click', () => setCameraMode(b.d
 el.landButtons.forEach((b) => b.addEventListener('click', () => selectLandscape(b.dataset.land)));
 el.styleButtons.forEach((b) => b.addEventListener('click', () => selectStyle(b.dataset.style)));
 
-el.start.addEventListener('click', () => toggleStartPause());
-el.pause.addEventListener('click', () => { if (gameplayLocked()) return; game.togglePause(); syncUI(); });
-el.restart.addEventListener('click', () => startFresh());
+// Sound / volume control. The level persists in localStorage (see sfx.js);
+// the mute button toggles to zero while remembering the last audible level.
+let lastVolume = getVolume() > 0 ? getVolume() : 0.6;
+
+function syncVolumeUI() {
+  const v = getVolume();
+  const pct = Math.round(v * 100);
+  el.volumeSlider.value = String(pct);
+  el.volumeVal.textContent = String(pct);
+  const muted = v <= 0;
+  el.muteBtn.textContent = muted ? '🔇' : '🔊';
+  el.muteBtn.classList.toggle('muted', muted);
+  el.muteBtn.setAttribute('aria-pressed', muted ? 'true' : 'false');
+  el.muteBtn.setAttribute('aria-label', muted ? 'Unmute' : 'Mute');
+}
+
+el.volumeSlider.addEventListener('input', () => {
+  const v = Number(el.volumeSlider.value) / 100;
+  if (v > 0) lastVolume = v;
+  setVolume(v);
+  unlockAudio();
+  syncVolumeUI();
+});
+
+el.muteBtn.addEventListener('click', () => {
+  if (getVolume() > 0) { lastVolume = getVolume(); setVolume(0); }
+  else { setVolume(lastVolume || 0.6); }
+  unlockAudio();
+  syncVolumeUI();
+  if (getVolume() > 0) sfx.turn(); // brief confirmation that sound is back on
+});
+
+syncVolumeUI();
+
 el.overlayBtn.addEventListener('click', () => {
   if (gameplayLocked()) return;
-  if (game.status === STATUS.READY) { game.start(); }
+  if (game.status === STATUS.READY) { game.start(); unlockAudio(); sfx.start(); }
   else { startFresh(); }
   syncUI();
 });
@@ -1284,7 +1318,7 @@ document.addEventListener('visibilitychange', () => {
 
 function toggleStartPause() {
   if (gameplayLocked()) return;
-  if (game.status === STATUS.READY) game.start();
+  if (game.status === STATUS.READY) { game.start(); unlockAudio(); sfx.start(); }
   else if (game.status === STATUS.PLAYING) game.pause();
   else if (game.status === STATUS.PAUSED) game.resume();
   else if (game.status === STATUS.OVER || game.status === STATUS.WON) startFresh();
@@ -1295,6 +1329,8 @@ function startFresh() {
   if (gameplayLocked()) return;
   game.restart();
   resetInterpolation();
+  unlockAudio();
+  sfx.start();
   syncUI();
 }
 
@@ -1425,21 +1461,18 @@ let best = Number(localStorage.getItem('snake3d-best') || 0);
 const INSTRUCTIONS = {
   follow: {
     html: '<b>Follow camera.</b> The view rides behind the snake. <b>← / →</b> (or <b>A / D</b>) turn <b>left &amp; right relative</b> to where the snake is heading.',
-    keys: 'Space start / pause · C cycle camera · R restart',
   },
   first: {
     html: '<b>First person.</b> You are at the snake\'s eye level looking forward. <b>← / →</b> (or <b>A / D</b>) steer <b>left &amp; right relative</b> to travel.',
-    keys: 'Space start / pause · C cycle camera · R restart',
   },
   overhead: {
     html: '<b>Overhead.</b> Classic top-down board (north is up). <b>Arrow keys / WASD</b> move in <b>absolute</b> compass directions.',
-    keys: 'Space start / pause · C cycle camera · R restart',
   },
 };
 
 function updateInstructions() {
   const i = INSTRUCTIONS[cameraMode];
-  el.instructions.innerHTML = `${i.html}<div class="keys">${i.keys}</div>`;
+  el.instructions.innerHTML = i.html;
 }
 
 const STATUS_LABEL = {
@@ -1460,15 +1493,8 @@ function syncUI() {
 
   const playing = game.status === STATUS.PLAYING;
   const paused = game.status === STATUS.PAUSED;
-  el.start.textContent = styleLoading ? 'Loading…'
-    : game.status === STATUS.READY ? 'Start' : playing ? 'Pause' : paused ? 'Resume' : 'Play again';
-  el.start.classList.toggle('primary', true);
   // Gameplay controls are disabled while the Toon bundle streams in.
-  el.start.disabled = styleLoading;
-  el.restart.disabled = styleLoading;
   el.overlayBtn.disabled = styleLoading;
-  el.pause.disabled = styleLoading || !(playing || paused);
-  el.pause.textContent = paused ? 'Resume' : 'Pause';
 
   // Both selectors are only editable in READY/OVER/WON, and both are locked
   // while a run is live (never a silent reset) or while Toon assets stream in.
@@ -1588,14 +1614,10 @@ window.addEventListener('resize', resize);
 // a "Loading" affordance; camera controls remain usable. syncUI() is called
 // afterwards to restore the correct labels/disabled states once ready.
 function setLoadingState(loading) {
-  el.start.disabled = loading;
-  el.restart.disabled = loading;
   el.overlayBtn.disabled = loading;
   el.landButtons.forEach((b) => { b.disabled = loading; });
   el.styleButtons.forEach((b) => { b.disabled = loading; });
   if (loading) {
-    el.start.textContent = 'Loading…';
-    el.pause.disabled = true;
     el.overlayTitle.textContent = 'SNAKE · 3D';
     el.overlayText.textContent = 'Loading assets…';
     el.overlayBtn.textContent = 'Loading…';

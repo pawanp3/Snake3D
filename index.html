@@ -170,6 +170,30 @@
         color: var(--lime-soft); margin: -2px 2px 0;
       }
 
+      /* Sound / volume control */
+      .volume-row { display: flex; align-items: center; gap: 12px; }
+      .volume-row .mute {
+        flex: none; width: 48px; min-height: 44px; padding: 0; font-size: 18px;
+      }
+      .volume-row .mute.muted { color: var(--danger); border-color: var(--danger); }
+      .volume {
+        flex: 1; -webkit-appearance: none; appearance: none; height: 6px;
+        border-radius: 999px; background: var(--panel-line); outline: none; cursor: pointer;
+      }
+      .volume::-webkit-slider-thumb {
+        -webkit-appearance: none; appearance: none; width: 18px; height: 18px;
+        border-radius: 50%; border: 2px solid #07200f; cursor: pointer;
+        background: linear-gradient(160deg, var(--lime), var(--lime-dim));
+      }
+      .volume::-moz-range-thumb {
+        width: 18px; height: 18px; border-radius: 50%; border: 2px solid #07200f;
+        cursor: pointer; background: linear-gradient(160deg, var(--lime), var(--lime-dim));
+      }
+      .volume-val {
+        font-family: var(--mono); font-size: 12px; color: var(--lime-soft);
+        width: 30px; text-align: right;
+      }
+
       .instructions {
         background: var(--bg-2);
         border: 1px dashed var(--panel-line);
@@ -362,26 +386,10 @@
           </div>
           <div class="land-food" id="landFood">Food · Apple</div>
         </div>
-
-        <div class="side-block topbar-style">
-          <div class="section-title">Visual style</div>
-          <div class="btn-grid two" id="styleButtons" role="group" aria-label="Visual style">
-            <button class="style active" data-style="classic" aria-pressed="true">Classic</button>
-            <button class="style" data-style="toon" aria-pressed="false">Toon</button>
-          </div>
-          <div class="style-scope" id="styleScope">Classic</div>
-        </div>
       </header>
 
       <aside class="controls">
         <div class="side-block">
-          <div class="section-title">Game</div>
-          <div class="btn-row">
-            <button id="startBtn" class="primary">Start</button>
-            <button id="pauseBtn" disabled>Pause</button>
-            <button id="restartBtn">Restart</button>
-          </div>
-
           <div class="section-title">Camera</div>
           <div class="btn-grid">
             <button class="cam active" data-cam="follow">Follow</button>
@@ -392,13 +400,19 @@
           <div class="instructions" id="instructions"></div>
         </div>
 
+        <div class="side-block">
+          <div class="section-title">Sound</div>
+          <div class="volume-row">
+            <button class="mute" id="muteBtn" type="button" aria-label="Mute" aria-pressed="false">🔊</button>
+            <input class="volume" id="volumeSlider" type="range" min="0" max="100" value="60"
+                   aria-label="Volume" />
+            <span class="volume-val" id="volumeVal">60</span>
+          </div>
+        </div>
+
         <div class="assets">
           <div class="scene-status loading" id="sceneStatus">Loading scene</div>
           <div class="scene-theme" id="sceneTheme">City Park · Apple</div>
-          <details class="scene-details">
-            <summary>Scene details</summary>
-            <ul id="assetList"></ul>
-          </details>
         </div>
       </aside>
 
